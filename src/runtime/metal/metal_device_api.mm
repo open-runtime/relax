@@ -214,8 +214,9 @@ Stream* CastStreamOrGetCurrent(TVMStreamHandle stream, int device_id) {
   if (stream != nullptr) return static_cast<Stream*>(stream);
   // Need to create a new stream before each use b/c of bug in Metal
   if (MetalThreadEntry::ThreadLocal()->stream.empty()) {
-    TVMStreamHandle new_stream = MetalWorkspace::Global()->CreateStream(dev);
-    MetalWorkspace::Global()->SetStream(dev, new_stream);
+    auto metal_dev = Device{kDLMetal, device_id};
+    TVMStreamHandle new_stream = MetalWorkspace::Global()->CreateStream(metal_dev);
+    MetalWorkspace::Global()->SetStream(metal_dev, new_stream);
   }
   ICHECK(MetalThreadEntry::ThreadLocal()->stream[device_id] != nullptr);
   return MetalThreadEntry::ThreadLocal()->stream[device_id];
@@ -322,8 +323,7 @@ void MetalWorkspace::SetStream(Device dev, TVMStreamHandle stream) {
   ICHECK(stream != nullptr);
   // Need to create a new stream before each use b/c of bug in Metal
   if (MetalThreadEntry::ThreadLocal()->stream.empty()) {
-    TVMStreamHandle new_stream = MetalWorkspace::Global()->CreateStream(dev);
-    MetalWorkspace::Global()->SetStream(dev, new_stream);
+    MetalThreadEntry::ThreadLocal()->stream.resize(devices.size());
   }
   MetalThreadEntry::ThreadLocal()->stream[dev.device_id] = static_cast<Stream*>(stream);
 }
