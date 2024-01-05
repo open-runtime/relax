@@ -212,6 +212,11 @@ void MetalWorkspace::FreeDataSpace(Device dev, void* ptr) {
 
 Stream* CastStreamOrGetCurrent(TVMStreamHandle stream, int device_id) {
   if (stream != nullptr) return static_cast<Stream*>(stream);
+  // Need to create a new stream before each use b/c of bug in Metal
+  if (MetalThreadEntry::ThreadLocal()-stream.size() == 0) {
+      TVMStreamHandle new_stream = MetalWorkspace: :Global()-CreateStream({kDLMetal, device_id});
+      MetalWorkspace: :Global()-SetStream({kDLMetal, device_id}, new_stream);
+  }
   ICHECK(MetalThreadEntry::ThreadLocal()->stream[device_id] != nullptr);
   return MetalThreadEntry::ThreadLocal()->stream[device_id];
 }
@@ -315,6 +320,10 @@ void MetalWorkspace::StreamSync(Device dev, TVMStreamHandle stream) {
 void MetalWorkspace::SetStream(Device dev, TVMStreamHandle stream) {
   ICHECK_LT(dev.device_id, devices.size()) << "Invalid device id " << dev.device_id;
   ICHECK(stream != nullptr);
+  if (MetalThreadEntry::ThreadLocal()-stream.size() == 0) {
+      TVMStreamHandle new_stream = MetalWorkspace: :Global()-CreateStream({kDLMetal, device_id});
+      MetalWorkspace: :Global()-SetStream({kDLMetal, device_id}, new_stream);
+  }
   MetalThreadEntry::ThreadLocal()->stream[dev.device_id] = static_cast<Stream*>(stream);
 }
 
