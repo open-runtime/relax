@@ -17,6 +17,7 @@
 """Relax transformations. """
 
 from .transform import (
+    AdjustMatmulOrder,
     AllocateWorkspace,
     AlterOpImpl,
     AnnotateTIROpPattern,
@@ -30,10 +31,12 @@ from .transform import (
     ConvertLayout,
     ConvertToDataflow,
     DataflowBlockPass,
+    DataflowUseInplaceCalls,
     DeadCodeElimination,
     DecomposeOpsForInference,
     DecomposeOpsForTraining,
     EliminateCommonSubexpr,
+    ExpandMatmulOfSum,
     ExpandTupleArguments,
     FewShotTuning,
     FoldConstant,
@@ -60,6 +63,7 @@ from .transform import (
     RemovePurityChecking,
     RemoveUnusedParameters,
     RemoveUnusedOutputs,
+    ReorderTakeAfterMatmul,
     RewriteCUDAGraph,
     RewriteDataflowReshape,
     RunCodegen,
@@ -67,6 +71,7 @@ from .transform import (
     StaticPlanBlockMemory,
     ToMixedPrecision,
     ToNonDataflow,
+    UpdateParamStructInfo,
     UpdateVDevice,
     VMBuiltinLower,
     VMShapeLower,

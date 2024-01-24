@@ -205,7 +205,7 @@ def test_two_subfunction():
         with bb.function("main", [x]):
             with bb.dataflow():
                 lv = bb.emit_te(fused_exp_squeeze, x)
-                lv2 = bb.emit_te(fused_exp_squeeze, lv)
+                lv2 = bb.call_te(fused_exp_squeeze, lv)
                 gv = bb.emit_output(lv2)
             bb.emit_func_output(gv)
         return bb.get()
@@ -245,7 +245,7 @@ def test_fuse_same_primfunc():
         x = relax.Var("x", R.Tensor([10, 20], "float32"))
         with bb.function("main", [x]):
             with bb.dataflow():
-                lv = bb.emit_te(fused_exp_exp_squeeze, x)
+                lv = bb.call_te(fused_exp_exp_squeeze, x)
                 gv = bb.emit_output(lv)
             bb.emit_func_output(gv)
         return bb.get()
@@ -257,7 +257,7 @@ def test_fuse_with_tuple_as_param():
     def before():
         bb = relax.BlockBuilder()
         x = relax.Var("x", R.Tuple([R.Tensor([10], "float32"), R.Tensor([10], "float32")]))
-        with bb.function("fused_exp_add", [x], attrs={"Primitive": True}):
+        with bb.function("fused_exp_add", [x], attrs={"Primitive": True}, private=True):
             with bb.dataflow():
                 lv0 = bb.emit(relax.TupleGetItem(x, 0))
                 lv1 = bb.emit(relax.TupleGetItem(x, 1))
@@ -300,7 +300,7 @@ def test_fuse_with_nested_tuple_as_param():
     def before():
         bb = relax.BlockBuilder()
         x = relax.Var("x", tuple_struct_info)
-        with bb.function("fused_exp_add_add", [x], attrs={"Primitive": True}):
+        with bb.function("fused_exp_add_add", [x], attrs={"Primitive": True}, private=True):
             with bb.dataflow():
                 lv0 = bb.emit(relax.TupleGetItem(x, 0))
                 lv0_exp = bb.emit_te(topi.exp, lv0)
@@ -373,7 +373,7 @@ def test_fuse_with_call_tir_in_main():
         with bb.function("main", [x]):
             with bb.dataflow():
                 lv = bb.emit_te(fused_exp_squeeze, x)
-                lv2 = bb.emit_te(topi.add, lv, relax.const(1, "float32"))
+                lv2 = bb.call_te(topi.add, lv, relax.const(1, "float32"))
                 gv = bb.emit_output(lv2)
             bb.emit_func_output(gv)
         return bb.get()
@@ -414,7 +414,7 @@ def test_fuse_with_const_in_argument():
         x = relax.Var("x", R.Tensor([10, 20], "float32"))
         with bb.function("main", [x]):
             with bb.dataflow():
-                lv = bb.emit_te(fused_add_exp_squeeze, x, relax.const(1, "float32"))
+                lv = bb.call_te(fused_add_exp_squeeze, x, relax.const(1, "float32"))
                 gv = bb.emit_output(lv)
             bb.emit_func_output(gv)
         return bb.get()
@@ -1268,7 +1268,7 @@ def test_tuple_input_unused_field():
                         (v_ax2 * T.int64(64) + v_ax3) % T.int64(2048),
                     ]
 
-        @R.function
+        @R.function(private=True)
         def fused_reshape(
             lv: R.Tuple(
                 R.Tensor((4, 8, 2048), dtype="float32"), R.Tensor((4, 8, 2048), dtype="float32")
@@ -1347,6 +1347,92 @@ def test_tuple_input_unused_field():
                 )
                 R.output(lv_1)
             return lv_1
+
+    _check(Module, Expected)
+
+
+def test_unique_duplicated_buffer_allocation():
+    @I.ir_module
+    class Module:
+        @T.prim_func(private=True)
+        def add(
+            A: T.Buffer((T.int64(4096), T.int64(4096)), "float16"),
+            Out: T.Buffer((T.int64(4096), T.int64(4096)), "float16"),
+        ):
+            for i, j in T.grid(T.int64(4096), T.int64(4096)):
+                with T.block("add"):
+                    vi, vj = T.axis.remap("SS", [i, j])
+                    Out[vi, vj] = A[vi, vj] + T.float16(1.0)
+
+        @T.prim_func(private=True)
+        def add1(
+            A: T.Buffer((T.int64(4096), T.int64(4096)), "float16"),
+            Out: T.Buffer((T.int64(4096), T.int64(4096)), "float16"),
+        ):
+            for i, j in T.grid(T.int64(4096), T.int64(4096)):
+                with T.block("add"):
+                    vi, vj = T.axis.remap("SS", [i, j])
+                    Out[vi, vj] = A[vi, vj] + T.float16(2.0)
+
+        @R.function
+        def main(
+            input_embeds: R.Tensor((4096, 4096), dtype="float16"),
+        ) -> R.Tensor((4096, 4096), dtype="float16"):
+            cls = Module
+            with R.dataflow():
+                gv: R.Tensor((4096, 4096), dtype="float16") = cls.fused_func(input_embeds)
+                R.output(gv)
+            return gv
+
+        @R.function(private=True)
+        def fused_func(
+            input_embeds: R.Tensor((4096, 4096), dtype="float16"),
+        ) -> R.Tensor((4096, 4096), dtype="float16"):
+            R.func_attr({"Primitive": 1})
+            cls = Module
+            with R.dataflow():
+                lv = R.call_tir(
+                    cls.add, (input_embeds,), out_sinfo=R.Tensor((4096, 4096), dtype="float16")
+                )
+                gv = R.call_tir(cls.add1, (lv,), out_sinfo=R.Tensor((4096, 4096), dtype="float16"))
+                R.output(gv)
+            return gv
+
+    @I.ir_module
+    class Expected:
+        @T.prim_func(private=True)
+        def fused_func(
+            input_embeds: T.Buffer((T.int64(4096), T.int64(4096)), "float16"),
+            Out_intermediate_1: T.Buffer((T.int64(4096), T.int64(4096)), "float16"),
+        ):
+            T.func_attr({"tir.noalias": T.bool(True)})
+            Out_intermediate = T.alloc_buffer((T.int64(4096), T.int64(4096)), "float16")
+            for i, j in T.grid(T.int64(4096), T.int64(4096)):
+                with T.block("add"):
+                    vi, vj = T.axis.remap("SS", [i, j])
+                    T.reads(input_embeds[vi, vj])
+                    T.writes(Out_intermediate[vi, vj])
+                    Out_intermediate[vi, vj] = input_embeds[vi, vj] + T.float16(1)
+            for i, j in T.grid(T.int64(4096), T.int64(4096)):
+                with T.block("add_1"):
+                    vi, vj = T.axis.remap("SS", [i, j])
+                    T.reads(Out_intermediate[vi, vj])
+                    T.writes(Out_intermediate_1[vi, vj])
+                    Out_intermediate_1[vi, vj] = Out_intermediate[vi, vj] + T.float16(2)
+
+        @R.function
+        def main(
+            input_embeds: R.Tensor((4096, 4096), dtype="float16")
+        ) -> R.Tensor((4096, 4096), dtype="float16"):
+            cls = Expected
+            with R.dataflow():
+                gv = R.call_tir(
+                    cls.fused_func,
+                    (input_embeds,),
+                    out_sinfo=R.Tensor((4096, 4096), dtype="float16"),
+                )
+                R.output(gv)
+            return gv
 
     _check(Module, Expected)
 
